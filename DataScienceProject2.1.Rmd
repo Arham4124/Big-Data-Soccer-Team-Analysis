@@ -1,0 +1,278 @@
+---
+title: "DataScienceProject2"
+output: html_document
+date: "2022-12-03"
+---
+
+```{r, eval=FALSE}
+# Install new packages (only needed once!)
+install.packages("caret")
+install.packages("rpart")
+install.packages("rpart.plot")
+install.packages("randomForest")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(factoextra)
+library(cluster)
+library(nycflights13)
+library(rvest)
+library(tidytext)
+library(wordcloud)
+library(RColorBrewer)
+library(ade4)
+library(plotROC)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+### Arham Salman, Kevin Dang, Malik Hamed
+
+## Title & Introduction 
+
+**Analysis of soccer Team Statistics across Major European Soccer Leagues**
+
+**Our group decided to compare different European soccer leagues and tournaments to determine which team is the best in the world. We wanted to use Soccer statistics for our project because we enjoy the sport and want to figure out which team is the best in the world. We chose datasets from Kaggle as they had relevant data from teams in the seasons from 2013-2018. These sources were interesting because they were all similarly formatted, and show the proper statistics that measure a team’s success. Each unique row in the datasets represent the team name (categorical variable), matches played (numeric variable), goals scored (numeric), wins & losses (numeric), and rank finished (numeric). The sources used for this project are cited below:                                                                                                                             https://www.kaggle.com/datasets/jehanbhathena/big-5-european-football-leagues-stats                                                                                      https://www.kaggle.com/datasets/suwadith/europes-top-5-league-tables-2009-2018                                                                         https://www.kaggle.com/datasets/quadeer15sh/premier-league-standings-11-seasons-20102021**
+
+```{r}
+#The following chunk of code renames each dataset exported from Kaggle to make data easier to analyze and save the import. (Arham)
+Bundesliga <- read.csv("~/Bundesliga Points Table (2013-2018).csv", header = TRUE)
+EPL <- read.csv("~/EPL Standings 2000-2022.csv", header = TRUE)
+LaLiga <- read.csv("~/Big 5 European football leagues teams stats.csv", header = TRUE)
+```
+
+
+
+We mutated and filtered the datasets so that they all have the same name for certain variables we will join them by later.
+
+``` {r}
+#changes variable names to a standard for joining later for all three leagues. (Arham)
+LaLiga <- LaLiga %>%
+  filter(League == "La Liga") %>%
+  mutate(Year = season, Team = squad, Rank = rank, Games = games, Wins = wins, Draws = draws, Losses = losses, Points = points, GoalsFor = goals_for, GoalsAgainst = goals_against)
+
+
+Bundesliga <- Bundesliga %>%
+  mutate(Games = Played, Wins = Win, Draws = Draw, Losses = Loss, GoalsFor = Goals.For, GoalsAgainst = Goals.Against) %>%
+  drop_na(Rank)
+  
+EPL <- EPL %>%
+  mutate(Year = Season, Rank = Pos, Games = Pld, Wins = W, Draws = D, Losses = L, Points = Pts,GoalsFor = GF, GoalsAgainst = GA)
+```
+
+**For the LaLiga dataset, we filtered out the league "LaLiga" from the Big 5 European football league teams stats dataset to only include one league for future analyses.**
+
+
+
+Then, we used full join to combine the three datasets into one big dataset that contains all the important observations from the other datasets under key variables
+
+``` {r}
+#first join function to join the leagues La Liga and Premier League. (Malik)
+
+
+Join2 <- LaLiga %>%
+  full_join(EPL, by = c("Rank", "Team", "Games", "Wins", "Year", "Draws", "Losses", "Points","GoalsFor", "GoalsAgainst", "League"))
+
+#second join function which joins the previous dataset to the Bundesliga league (Malik)
+
+BigDataset <- Join2 %>%
+  full_join(Bundesliga, by = c("Team", "Rank", "Games", "Wins", "Year", "Draws", "Losses", "Points", "GoalsFor","GoalsAgainst", "League"))
+
+BigDatasetFinal <- BigDataset %>%
+  select(Team, Rank, Wins, Losses, GoalsFor, GoalsAgainst, Year, Games, Points, Draws, League) %>%
+  filter(Year > 2013 & Year < 2018) %>%
+  arrange(Year, League) %>%
+  group_by(Team, Wins)
+```
+
+
+## Exploratory Data Analysis
+
+``` {r}
+BigDatasetFinalnum <- BigDatasetFinal %>%
+  ungroup() %>%
+  select(-Team, -Year, -League)
+
+
+# Find the correlations among all variables
+cor(BigDatasetFinalnum, use = "pairwise.complete.obs") %>%
+  # Save as a data frame
+  as.data.frame %>%
+  # Convert row names to an explicit variable
+  rownames_to_column %>%
+  # Pivot so that all correlations appear in the same column
+  pivot_longer(-1, 
+               names_to = "other_var", 
+               values_to = "correlation") %>%
+  # Define ggplot (reorder values on y-axis)
+  ggplot(aes(x = rowname, 
+             y = ordered(other_var, levels = rev(sort(unique(other_var)))),
+             fill = correlation)) +
+  # Heat map with geom_tile
+  geom_tile() +
+  # Change the scale to make the middle appear neutral
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue") +
+  # Overlay values
+  geom_text(aes(label = round(correlation,2)), color = "black", size = 4) +
+  # Angle the x-axis label to 45 degrees
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  # Give title and labels
+  labs(title = "Correlation matrix for our dataset", 
+       x = "variable 1", y = "variable 2")
+
+
+
+
+# Correlation between Team Points and Games Won (0.99)
+ggplot(data = BigDatasetFinalnum, aes(x = Points, y = Wins)) + geom_point() + geom_smooth(method = "lm") + theme_minimal() + labs(title = "Relationship between Team Points and Games Won", x = "Points") + scale_x_continuous(breaks = seq(0, 120, 15))
+
+# Correlation between Team Points and Rank (-0.91)
+ggplot(data = BigDatasetFinalnum, aes(x = Points, y = Rank)) + geom_point() + geom_smooth(method = "lm") + theme_light() + labs(title = "Relationship between Team Points and Team Rank", x = "Points") + scale_x_continuous(breaks = seq(0, 120, 15))
+
+# Correlation between Goals Scored and Team Points (0.89)
+ggplot(data = BigDatasetFinalnum, aes(x = Points, y = GoalsFor)) + geom_point() + geom_smooth(method = "lm") + theme_gray() + labs(title = "Relationship between Team Points and Games Scored", x = "Points") + scale_x_continuous(breaks = seq(0, 120, 15))
+
+# Correlation between Games Played and Draws (0.13)
+ggplot(data = BigDatasetFinalnum, aes(x = Draws, y = Games)) + geom_point() + geom_smooth(method = "lm") + theme_classic() + labs(title = "Relationship between Games Played and Draws", x = "Draws") + scale_x_continuous(breaks = seq(0, 120, 15))
+
+# Correlation between Games Played and Team Rank (0.08)
+ggplot(data = BigDatasetFinalnum, aes(x = Rank, y = Games)) + geom_point() + geom_smooth(method = "lm") + theme_minimal() + labs(title = "Relationship between Games Played and Team Rank", x = "Rank") + scale_x_continuous(breaks = seq(0, 120, 15))
+
+# Correlation between Goals Scored and Goals Conceded (-0.57)
+ggplot(data = BigDatasetFinalnum, aes(x = GoalsFor, y = GoalsAgainst)) + geom_point() + geom_smooth(method = "lm") + theme_minimal() + labs(title = "Relationship between Goals Scored and Goals Conceded", x = "GoalsFor") + scale_x_continuous(breaks = seq(0, 120, 15))
+
+```
+**After creating a correlation matrix with all the numeric variables in our dataset, we compared all the correlation values of the different variables in relation to each other. The variables with the strongest correlation were Team Points and Games Won with a value of 0.99, Team Points and Rank with a value of -0.91, and Goals Scored and Team Points with a correlation value of 0.89. The variables with the weakest correlation were Games Played and Games Drawn with a value of 0.13, Games Played and Team Rank with a value of 0.08, and Goals Scored and Goals Conceded with a value of -0.57. The correlation between Goals Scored and Games won, relevant to our research question, has a strong correlation with a value of 0.89, showing that a team that scores more goals (contributing to offense) is more likely to be a better team. On the contrary, teams with high goals conceded, (representing bad defense), have less game wins as they have a correlation of -0.76**
+
+
+## Clustering 
+
+``` {r}
+BigDataset_scaled <- BigDatasetFinalnum %>% 
+  select(GoalsFor, GoalsAgainst, Wins, Losses, Points) %>%
+  scale
+
+kmeans_results <- BigDataset_scaled %>%
+  kmeans(centers = 2) # centers determine the number of clusters
+
+#
+BigDataset_kmeans <- BigDatasetFinalnum %>%
+  mutate(cluster = as.factor(kmeans_results$cluster))
+
+# Look at 10 random values
+sample_n(BigDataset_kmeans, 10)
+
+# Finds the optimal number of clusters
+fviz_cluster(kmeans_results, data = BigDataset_scaled)
+
+# obtains silhouette of the kmeans cluster
+fviz_nbclust(BigDataset_scaled, kmeans, method = "silhouette")
+
+# visualizes kmeans cluster
+fviz_nbclust(BigDataset_scaled, kmeans, method = "wss")
+
+# Observe the results of kmeans clustering
+kmeans_results
+```
+
+**After using kmeans to cluster our data, we found that it was optimal to use 2 clusters because of the elbow test and the silhouette test. Cluster 1 represents the team observations with more wins, points, and goals while Cluster 2 represents observations with more losses, goals conceded, and least points. The observation in the middle represents West Bromwich Albion in the 2013-2014 season where they had 36 points, 43 goals, and 7 wins. According to the kmeans results, Cluster 1 had a GoalsFor statistic of 1.168 while Cluster 2 had one of -0.51. For Goals Conceded, Cluster 2 had a higher value compared to Cluster 1 (0.438 vs -1.00). For team wins, Cluster 1 had a higher value compared to Cluster 2 (1.26 vs -0.551). For losses, Cluster 1 has a lower value compared to Cluster 2 (-1.19 vs 0.52). Lastly, for Points, Cluster 1 had a higher value than Cluster 2 (1.28 vs -0.56).**
+
+
+## Dimensionality Reduction
+
+``` {r}
+pca <- BigDatasetFinalnum %>%
+  select_if(is.numeric) %>%
+  scale %>%
+  prcomp
+
+# Variation explained by PC
+fviz_eig(pca, addlabels = TRUE, ylim = c(0, 70))
+
+# Visualizes the PCA with a correlation circle
+fviz_pca_var(pca, col.var = "black", 
+             repel = TRUE)
+```
+
+**After using prcomp to find the principal components, the 8 PCs are represented by their percentage of explained variance. PCs 6-8 have an explained variance of 0% while the first two have 66.1% and 13.9% respectively. We visualized the observations using the first two PCs with a correlation circle and found that the variables Wins, GoalsFor, and Points slightly affect Dimension 2 negatively and strongly affect Dimension 1 negatively On the contrary, GoalsAgainst, Losses, and Rank strongly affect Dimension 1 positively and also adversely affect Dimension 2. Games only affect Dimension 2 negatively while having no impact on Dimension 1. Draws affect Dimension 1 and Dimension 2 negatively about the same.**
+
+
+## Classification and Cross-Validation
+
+``` {r}
+# sorts variable points into values of 1 or 2 based off how many points a team has
+BigDatasetFinalnum2 <- BigDatasetFinalnum %>%
+   mutate(outcome = ifelse(Points >= 60 , 1, 0))
+
+# random sampling from dataset
+sample_process <- sample(c(TRUE, FALSE), # take value TRUE or FALSE
+                 nrow(BigDatasetFinalnum2), # for each row in biopsy
+                 replace = TRUE, # TRUE or FALSE can repeat
+                 prob = c(0.7, 0.3)) # 70% TRUE, 30% FALSE
+
+# creates train set that samples from dataset
+train <- BigDatasetFinalnum2[sample_process, ]
+
+# uses kNN as a classification method
+BigDataset_kNN <- knn3(outcome ~ .,
+                data = train, 
+                k = 5)
+# creates train data frame that predicts kNN values
+df_train <- data.frame(
+  predictions = predict(BigDataset_kNN, train)[,2],
+  outcome = train$outcome,
+  name = "train")
+
+# visualizes ROC curve of predictor and outcome
+ggplot(df_train) + 
+  geom_roc(aes(d = outcome, m = predictions, color = name, n.cuts = 0)) +
+  labs(title = "ROC curve for kNN")
+
+# finds AUC of the ROC curve
+calc_auc(ROC)$AUC
+
+
+
+perf_k <- NULL
+
+k = 10
+
+# Randomly order rows in the dataset
+data <- BigDatasetFinalnum2[sample(nrow(BigDatasetFinalnum2)), ] 
+
+# Create k folds from the dataset
+folds <- cut(seq(1:nrow(data)), breaks = k, labels = FALSE)
+
+# Use a for loop to get diagnostics for each test set
+for(i in 1:k){
+  # Create train and test sets
+  train <- data[folds != i, ] # all observations except in fold i
+  test <- data[folds == i, ]  # observations in fold i
+
+  # Train model on train set (all but fold i)
+  BigDataset_kNN <- knn3(outcome ~ .,
+                data = train, 
+                k = 5)
+
+  # Test model on test set (fold i)
+  df <- data.frame(
+    predictions = predict(BigDataset_kNN, test)[,2],
+    outcome = test$outcome)
+
+  # Consider the ROC curve for the test dataset
+  ROC <- ggplot(df) + 
+    geom_roc(aes(d = outcome, m = predictions))
+
+  # Get diagnostics for fold i (AUC)
+  perf_k[i] <- calc_auc(ROC)$AUC
+}
+
+# Average performance 
+mean(perf_k)
+```
+**We used a kNN classifier to predict the Points based off the rest of the variables in our dataset. We trained the model to get predictions for all observations in our dataset. After building a ROC curve, we calculated the AUC value and found it to be 1. After performing k-fold cross-validation with the kNN classifier, we calculated the average performance and found the value to be 0.995. Our classifier predicts our new observations very well according to the average performance value. However, after observing the ROC curve, we concluded that there were signs of overfitting as the curve flattened sharply at the top and there were no steps.**
+
